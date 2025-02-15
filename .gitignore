@@ -169,3 +169,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+jan.exe
+depot.csv
+console_v3.py
+chart_v1.py
+.gitignore
+chart_v2.py
+console_newlogic.py
