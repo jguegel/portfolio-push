@@ -31,6 +31,20 @@ try:
         csvreader = csv.reader(csvfile)
         header = next(csvreader)
         rows = [row for row in csvreader]
+
+    # Check if additional columns exist, add them if not
+    additional_columns = ["single_value", "last_request_timestamp", "last_trade_timestamp"]
+    for col in additional_columns:
+        if col not in header:
+            header.append(col)
+            for row in rows:
+                row.append("N/A")
+
+    # Write back the updated CSV structure (only if new columns were added)
+    with open(filename, "w", newline="") as csvfile:
+        csvwriter = csv.writer(csvfile)
+        csvwriter.writerow(header)
+        csvwriter.writerows(rows)
 except FileNotFoundError:
     print(f"Error: {filename} not found!")
     exit(1)
@@ -49,30 +63,47 @@ def wait_for_exit():
 
 threading.Thread(target=wait_for_exit, daemon=True).start()
 
-def update_display(formatted_now, last_trade_formatted, change_total, entry_total, total):
+def update_display():
     clear_screen()
     formatted_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total = 0
+    entry_total = 0
+    change_total = 0
+    last_trade_timestamp = "N/A"
+
+    with open(filename, "r") as csvfile:
+        csvreader = csv.reader(csvfile)
+        data = list(csvreader)
+        header = data[0]
+        rows = data[1:]
+    
+    for row in rows:
+        try:
+            total += float(row[-3]) * float(row[1])
+            entry_total += float(row[1]) * float(row[2])
+            change_total += (float(row[-3]) - float(row[2])) * float(row[1])
+            last_trade_timestamp = row[-1]
+        except ValueError:
+            continue
+    
     print("\nPress ENTER to stop the script...\n")
     print(f"Latest request timestamp:   {formatted_now}")
-    print(f"Latest trade timestamp:     {last_trade_formatted}")
+    print(f"Latest trade timestamp:     {last_trade_timestamp}")
     print(f"Change to previous day:     {color(change_total)}")
     print(f"Total depot change:         {color(entry_total)}")
     print(f"Total depot value:          {round(total, 2)}")
 
-total = 0  # Keep track of total value persistently
 while not stop_script:
     last_trade_timestamps = []
     error_occurred = False
 
-    i = 0
-    while i < len(rows):
+    for row in rows:
         if stop_script:
             break
-        
         try:
-            ticker_symbol = rows[i][0]
-            shares_owned = float(rows[i][1])
-            purchase_price = float(rows[i][2])
+            ticker_symbol = row[0]
+            shares_owned = float(row[1])
+            purchase_price = float(row[2])
 
             stock = yf.Ticker(ticker_symbol)
             stock_info = stock.history(period="1d")
@@ -83,48 +114,35 @@ while not stop_script:
             current_price = stock_info["Close"].iloc[-1]
             price_change = stock_info["Close"].iloc[-1] - stock_info["Open"].iloc[-1]
 
-            if ticker_symbol not in last_known_values:
-                last_known_values[ticker_symbol] = {
-                    "current_price": current_price,
-                    "price_change": price_change,
-                }
-
-            last_known_values[ticker_symbol]["current_price"] = current_price
-            last_known_values[ticker_symbol]["price_change"] = price_change
+            last_known_values[ticker_symbol] = {
+                "current_price": current_price,
+                "price_change": price_change,
+            }
 
             last_trade_timestamps.append(datetime.now(berlin_tz))
-
-
         except Exception as e:
-            print(f"Error fetching data for {rows[i][0]}: {e}")
+            print(f"Error fetching data for {row[0]}: {e}")
             error_occurred = True
-        i += 1  # Ensure i increments even if an error occurs
+        
+        formatted_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Update CSV with new values
+        if ticker_symbol in last_known_values:
+            row[-3] = round(last_known_values[ticker_symbol]["current_price"], 2)
+            row[-2] = formatted_now
+            row[-1] = last_trade_timestamps[-1].strftime("%Y-%m-%d %H:%M:%S")
 
+        with open(filename, "w", newline="") as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(header)
+            csvwriter.writerows(rows)
+        
+        # Update display after each row
+        update_display()
+        
         if stop_script:
             break  # Check after each loop iteration
 
-    total = sum(
-        last_known_values[ticker]["current_price"] * float(rows[i][1])
-        for i, ticker in enumerate(last_known_values)
-    )
-    entry_total = sum(float(rows[i][1]) * float(rows[i][2]) for i in range(len(rows)))
-    change_total = sum(
-        last_known_values[ticker]["price_change"] * float(rows[i][1])
-        for i, ticker in enumerate(last_known_values)
-    )
-
-    latest_trade_timestamp = max(last_trade_timestamps, default="N/A")
-    if isinstance(latest_trade_timestamp, datetime):
-        latest_trade_timestamp = latest_trade_timestamp.strftime("%Y-%m-%d %H:%M:%S")
-    oldest_trade_timestamp = min(last_trade_timestamps, default="N/A")
-
-    if isinstance(latest_trade_timestamp, datetime) and isinstance(oldest_trade_timestamp, datetime):
-        if oldest_trade_timestamp < latest_trade_timestamp - timedelta(days=1):
-            latest_trade_timestamp = "Check CSV, timestamp gap too big"
-
-    formatted_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    update_display(formatted_now, latest_trade_timestamp, change_total, entry_total, total)
-
-    time.sleep(5)
+    #time.sleep(1)
 
 print("\nScript stopped successfully.")
